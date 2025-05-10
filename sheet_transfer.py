@@ -36,7 +36,6 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('sheet_transfer.log'),
         logging.StreamHandler(sys.stdout)
     ]
 )
