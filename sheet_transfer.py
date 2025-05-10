@@ -264,14 +264,16 @@ def get_url_from_row(row, column_index, target_domain=None):
         
     return url
 
-def filter_domain_rows(rows, domain_column_index, target_domain):
+def filter_domain_rows(rows, domain_column_index, target_domain, last_timestamp=None):
     """
-    Фильтрует строки, содержащие заданный домен в указанном столбце.
+    Фильтрует строки, содержащие заданный домен в указанном столбце
+    и имеющие дату в первом столбце новее указанной.
     
     Args:
         rows: Список строк с данными
         domain_column_index: Индекс столбца с URL
         target_domain: Целевой домен для фильтрации
+        last_timestamp: Пороговая дата (включительно) для фильтрации по времени
         
     Returns:
         Список отфильтрованных строк
@@ -280,12 +282,38 @@ def filter_domain_rows(rows, domain_column_index, target_domain):
     total_processed = 0
     short_rows = 0
     domain_found = 0
+    date_filtered = 0
     
     logger.info(f"Начинаем фильтрацию строк по домену {target_domain} в столбце с индексом {domain_column_index}")
+    if last_timestamp:
+        logger.info(f"Применяем фильтрацию по дате: строки с датой > {last_timestamp}")
     
     for i, row in enumerate(rows):
         try:
             total_processed += 1
+            
+            # Проверяем дату в первом столбце, если указана временная метка
+            if last_timestamp and len(row) > 0:
+                date_str = row[0]
+                # Проверяем, что значение существует и выглядит как дата
+                if not date_str or not isinstance(date_str, str):
+                    logger.debug(f"Строка {i+1} не содержит дату в первом столбце: {row}")
+                    continue
+                    
+                # Пробуем разобрать дату
+                try:
+                    row_date = datetime.datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S")
+                    # Если дата старше или равна последней обработанной, пропускаем
+                    if row_date <= last_timestamp:
+                        date_filtered += 1
+                        if i < 10 or i % 100 == 0:  # Для ограничения вывода
+                            logger.debug(f"Строка {i+1} пропущена по дате: {row_date} <= {last_timestamp}")
+                        continue
+                except ValueError:
+                    logger.debug(f"Не удалось разобрать дату '{date_str}' в строке {i+1}")
+                    # Пропускаем строку, если не удалось разобрать дату
+                    continue
+            
             # Получаем URL из строки данных
             url = get_url_from_row(row, domain_column_index, target_domain)
             
@@ -303,7 +331,7 @@ def filter_domain_rows(rows, domain_column_index, target_domain):
             # Проверка наличия домена в URL
             if is_domain_in_url(url, target_domain):
                 domain_found += 1
-                logger.info(f"Найден домен {target_domain} в строке {i+1}, URL: {url}")
+                logger.debug(f"Найден домен {target_domain} в строке {i+1}, URL: {url}")
                 filtered_rows.append(row)
         except Exception as e:
             logger.error(f"Ошибка при обработке строки {i+1}: {e}")
@@ -311,6 +339,8 @@ def filter_domain_rows(rows, domain_column_index, target_domain):
     
     logger.info(f"Всего обработано строк: {total_processed}")
     logger.info(f"Строк без URL: {short_rows}")
+    if last_timestamp:
+        logger.info(f"Строк отфильтровано по дате (старые): {date_filtered}")
     logger.info(f"Строк с доменом {target_domain}: {domain_found}")
     
     if domain_found == 0:
@@ -424,6 +454,7 @@ def filter_duplicates(new_rows, existing_rows):
 def write_to_target_sheet(service, spreadsheet_id, sheet_name, rows):
     """
     Записывает данные в целевую таблицу и обновляет метаданные синхронизации.
+    Новые строки добавляются в конец таблицы.
     
     Args:
         service: Сервис Google Sheets API
@@ -445,18 +476,17 @@ def write_to_target_sheet(service, spreadsheet_id, sheet_name, rows):
         if rows:
             logger.info(f"Первая строка данных для переноса (после заголовка): {rows[0]}")
             
-        # Записываем данные
+        # Записываем данные в конец таблицы
         body = {
             'values': rows
         }
         
-        # Определяем диапазон для записи
-        start_row = 2  # Оставляем первую строку для метаданных
-        
-        result = service.spreadsheets().values().update(
+        # Используем append вместо update для добавления строк в конец таблицы
+        result = service.spreadsheets().values().append(
             spreadsheetId=spreadsheet_id,
-            range=f"{sheet_name}!A{start_row}",
+            range=f"{sheet_name}",
             valueInputOption='RAW',
+            insertDataOption='INSERT_ROWS',
             body=body
         ).execute()
         
@@ -474,7 +504,7 @@ def write_to_target_sheet(service, spreadsheet_id, sheet_name, rows):
             body={'values': metadata}
         ).execute()
         
-        logger.info(f"Успешно записано {len(rows)} строк на вкладку '{sheet_name}'")
+        logger.info(f"Успешно добавлено {len(rows)} строк в конец вкладки '{sheet_name}'")
         return len(rows)
     except Exception as e:
         logger.error(f"Ошибка при записи данных в целевую таблицу: {e}")
@@ -502,12 +532,67 @@ def check_spreadsheet_access(service, spreadsheet_id, description):
         logger.error(f"Ошибка доступа к таблице {description} (ID: {spreadsheet_id}): {e}")
         return False
 
+def get_latest_timestamp_from_target(existing_data):
+    """
+    Получает последнюю (максимальную) дату из первого столбца целевой таблицы.
+    
+    Args:
+        existing_data: Список строк данных из целевой таблицы
+        
+    Returns:
+        datetime объект с последней датой или None, если даты не найдены
+    """
+    try:
+        # Проверяем, что в таблице есть данные (минимум заголовок и одна строка)
+        if len(existing_data) <= 1:
+            logger.info("В целевой таблице нет данных для определения последней даты")
+            return None
+            
+        # Пропускаем заголовок (первую строку)
+        data_rows = existing_data[1:]
+        
+        latest_timestamp = None
+        parsed_dates = []
+        
+        # Перебираем все строки и ищем максимальную дату
+        for row in data_rows:
+            if not row or len(row) == 0:
+                continue
+                
+            # Получаем значение из первого столбца
+            date_str = row[0]
+            
+            # Проверяем, что значение существует и выглядит как дата
+            if not date_str or not isinstance(date_str, str):
+                continue
+                
+            # Пробуем разобрать дату в формате "YYYY-MM-DD HH:MM:SS"
+            try:
+                dt = datetime.datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S")
+                parsed_dates.append(dt)
+            except ValueError:
+                logger.debug(f"Не удалось разобрать дату '{date_str}' в строке {row}")
+                continue
+        
+        # Если нашли хотя бы одну дату, определяем максимальную
+        if parsed_dates:
+            latest_timestamp = max(parsed_dates)
+            logger.info(f"Найдена последняя дата в целевой таблице: {latest_timestamp}")
+        else:
+            logger.info("Не удалось найти корректные даты в целевой таблице")
+            
+        return latest_timestamp
+    except Exception as e:
+        logger.warning(f"Ошибка при определении последней даты: {e}")
+        return None
+
 def transfer_sheet_data(url_column_index=9, domain=None, source_sheet_name=None):
     """
     Основная функция для переноса данных между таблицами.
     
     Копирует строки с доменом forum-info.ru из исходной таблицы
     в целевую таблицу на соответствующей вкладке месяца и года.
+    Учитывает только новые строки с датой новее последней в целевой таблице.
     
     Args:
         url_column_index: Индекс столбца с URL (по умолчанию 9 - столбец J)
@@ -544,6 +629,30 @@ def transfer_sheet_data(url_column_index=9, domain=None, source_sheet_name=None)
             
         if not check_spreadsheet_access(service, target_spreadsheet_id, "назначение"):
             return
+        
+        # Получаем или создаем целевую вкладку
+        target_sheet_name = get_or_create_target_sheet(service, target_spreadsheet_id)
+        
+        # Получаем существующие данные из целевой таблицы для проверки дубликатов и определения последней даты
+        existing_data = get_existing_target_data(service, target_spreadsheet_id, target_sheet_name)
+        
+        if existing_data:
+            logger.info(f"В целевой вкладке '{target_sheet_name}' уже есть {len(existing_data)} строк")
+            
+            # Выводим заголовок и первую строку данных целевой таблицы для отладки
+            if len(existing_data) > 0:
+                logger.info(f"Заголовок в целевой таблице: {existing_data[0] if existing_data[0] else 'Пусто'}")
+                if len(existing_data) > 1:
+                    logger.info(f"Первая строка данных в целевой таблице: {existing_data[1]}")
+        
+        # Получаем последнюю дату из целевой таблицы
+        last_timestamp = None
+        if existing_data:
+            last_timestamp = get_latest_timestamp_from_target(existing_data)
+            if last_timestamp:
+                logger.info(f"Обрабатываем только записи новее: {last_timestamp}")
+            else:
+                logger.info("Не удалось определить последнюю дату, обрабатываем все записи")
         
         # Получаем данные из исходной таблицы, указывая нужный лист
         source_data = get_source_data(service, source_spreadsheet_id, source_sheet_name)
@@ -588,27 +697,12 @@ def transfer_sheet_data(url_column_index=9, domain=None, source_sheet_name=None)
         for sample in sample_urls:
             logger.info(f"  {sample}")
         
-        # Используем более продвинутую фильтрацию строк с доменом
-        filtered_rows = filter_domain_rows(data_rows, url_column_index, target_domain)
+        # Используем более продвинутую фильтрацию строк с доменом и учетом даты
+        filtered_rows = filter_domain_rows(data_rows, url_column_index, target_domain, last_timestamp)
         
         if not filtered_rows:
-            logger.info(f"Не найдено строк с доменом {target_domain}")
+            logger.info(f"Не найдено новых строк с доменом {target_domain}")
             return
-        
-        # Получаем или создаем целевую вкладку
-        target_sheet_name = get_or_create_target_sheet(service, target_spreadsheet_id)
-        
-        # Получаем существующие данные из целевой таблицы
-        existing_data = get_existing_target_data(service, target_spreadsheet_id, target_sheet_name)
-        
-        if existing_data:
-            logger.info(f"В целевой вкладке '{target_sheet_name}' уже есть {len(existing_data)} строк")
-            
-            # Выводим заголовок и первую строку данных целевой таблицы для отладки
-            if len(existing_data) > 0:
-                logger.info(f"Заголовок в целевой таблице: {existing_data[0] if existing_data[0] else 'Пусто'}")
-                if len(existing_data) > 1:
-                    logger.info(f"Первая строка данных в целевой таблице: {existing_data[1]}")
         
         # Фильтруем дубликаты
         unique_rows = filter_duplicates(filtered_rows, existing_data)
