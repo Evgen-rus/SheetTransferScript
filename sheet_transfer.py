@@ -686,14 +686,14 @@ def transfer_sheet_data(url_column_index=9, domain=None, source_sheet_name=None)
         
         # Логируем примеры URL для отладки
         sample_urls = []
-        for i, row in enumerate(data_rows[:10]):  # Проверяем первые 10 строк
+        for i, row in enumerate(data_rows[:3]):  # Проверяем первые 3 строк
             if len(row) > url_column_index:
                 url = row[url_column_index]
                 sample_urls.append(f"[{i+1}] {url}")
             else:
                 sample_urls.append(f"[{i+1}] <URL отсутствует>")
                 
-        logger.info(f"Примеры URL из таблицы (первые 10 строк):")
+        logger.info(f"Примеры URL из таблицы (первые 3 строки):")
         for sample in sample_urls:
             logger.info(f"  {sample}")
         
