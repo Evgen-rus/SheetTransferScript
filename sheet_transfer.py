@@ -13,7 +13,7 @@ from google.oauth2 import service_account
 # Константы
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 TARGET_DOMAIN = 'forum-info.ru'
-FIRST_MONTH = 'Май 2025'
+FIRST_MONTH = 'Июнь 2025'
 
 # Словарь месяцев на русском языке
 RUSSIAN_MONTHS = {
