@@ -363,9 +363,9 @@ def get_or_create_target_sheet(service, spreadsheet_id):
         # Получаем текущий месяц и год
         now = datetime.datetime.now(pytz.timezone('Europe/Moscow'))
         
-        # Для примера используем фиксированный месяц (согласно требованиям)
-        # current_sheet_name = f"{RUSSIAN_MONTHS[now.month]} {now.year}"
-        current_sheet_name = FIRST_MONTH
+        # Автоматическое определение текущего месяца
+        current_sheet_name = f"{RUSSIAN_MONTHS[now.month]} {now.year}"
+        # current_sheet_name = FIRST_MONTH
         
         logger.info(f"Проверяем наличие вкладки: '{current_sheet_name}'")
         
