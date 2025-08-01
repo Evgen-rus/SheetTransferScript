@@ -348,13 +348,43 @@ def filter_domain_rows(rows, domain_column_index, target_domain, last_timestamp=
     
     return filtered_rows
 
-def get_or_create_target_sheet(service, spreadsheet_id):
+def copy_headers_to_new_sheet(service, spreadsheet_id, sheet_name, header_row):
     """
-    Получает или создает вкладку для текущего месяца и года.
+    Копирует заголовки в новую вкладку.
     
     Args:
         service: Сервис Google Sheets API
         spreadsheet_id: ID целевой таблицы
+        sheet_name: Название вкладки
+        header_row: Строка с заголовками
+    """
+    try:
+        if header_row:
+            logger.info(f"Копируем заголовки в новую вкладку '{sheet_name}'")
+            logger.info(f"Заголовки: {header_row}")
+            
+            # Записываем заголовки в первую строку
+            service.spreadsheets().values().update(
+                spreadsheetId=spreadsheet_id,
+                range=f"{sheet_name}!A1",
+                valueInputOption='RAW',
+                body={'values': [header_row]}
+            ).execute()
+            
+            logger.info(f"Заголовки успешно скопированы в вкладку '{sheet_name}'")
+    except Exception as e:
+        logger.error(f"Ошибка при копировании заголовков: {e}")
+        raise
+
+def get_or_create_target_sheet(service, spreadsheet_id, header_row=None):
+    """
+    Получает или создает вкладку для текущего месяца и года.
+    Если вкладка создается впервые, копирует заголовки из исходной таблицы.
+    
+    Args:
+        service: Сервис Google Sheets API
+        spreadsheet_id: ID целевой таблицы
+        header_row: Строка с заголовками для новой вкладки (опционально)
         
     Returns:
         Название вкладки
@@ -399,6 +429,10 @@ def get_or_create_target_sheet(service, spreadsheet_id):
             # Получаем ID созданной вкладки для логирования
             sheet_id = response['replies'][0]['addSheet']['properties']['sheetId']
             logger.info(f"Создана новая вкладка: '{current_sheet_name}' (ID вкладки: {sheet_id})")
+            
+            # Копируем заголовки в новую вкладку, если они предоставлены
+            if header_row:
+                copy_headers_to_new_sheet(service, spreadsheet_id, current_sheet_name, header_row)
             
         return current_sheet_name
     except Exception as e:
@@ -630,8 +664,20 @@ def transfer_sheet_data(url_column_index=9, domain=None, source_sheet_name=None)
         if not check_spreadsheet_access(service, target_spreadsheet_id, "назначение"):
             return
         
-        # Получаем или создаем целевую вкладку
-        target_sheet_name = get_or_create_target_sheet(service, target_spreadsheet_id)
+        # Получаем данные из исходной таблицы, указывая нужный лист
+        source_data = get_source_data(service, source_spreadsheet_id, source_sheet_name)
+        
+        if not source_data:
+            logger.warning("Исходная таблица пуста или не содержит данных")
+            return
+            
+        # Логируем структуру первых строк для отладки
+        logger.info(f"Всего строк в исходной таблице: {len(source_data)}")
+        header_row = source_data[0] if source_data else []
+        logger.info(f"Заголовки таблицы: {header_row}")
+        
+        # Получаем или создаем целевую вкладку с заголовками
+        target_sheet_name = get_or_create_target_sheet(service, target_spreadsheet_id, header_row)
         
         # Получаем существующие данные из целевой таблицы для проверки дубликатов и определения последней даты
         existing_data = get_existing_target_data(service, target_spreadsheet_id, target_sheet_name)
@@ -653,18 +699,6 @@ def transfer_sheet_data(url_column_index=9, domain=None, source_sheet_name=None)
                 logger.info(f"Обрабатываем только записи новее: {last_timestamp}")
             else:
                 logger.info("Не удалось определить последнюю дату, обрабатываем все записи")
-        
-        # Получаем данные из исходной таблицы, указывая нужный лист
-        source_data = get_source_data(service, source_spreadsheet_id, source_sheet_name)
-        
-        if not source_data:
-            logger.warning("Исходная таблица пуста или не содержит данных")
-            return
-            
-        # Логируем структуру первых строк для отладки
-        logger.info(f"Всего строк в исходной таблице: {len(source_data)}")
-        header_row = source_data[0] if source_data else []
-        logger.info(f"Заголовки таблицы: {header_row}")
         
         # Находим индекс столбца URL по заголовку
         if 'URL' in header_row:
