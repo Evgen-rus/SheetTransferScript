@@ -764,14 +764,17 @@ if __name__ == "__main__":
         
         # Парсинг аргументов командной строки
         parser = argparse.ArgumentParser(description='Перенос данных между Google таблицами.')
+        # Динамический месяц для значения по умолчанию параметра --source_sheet
+        now_cli = datetime.datetime.now(pytz.timezone('Europe/Moscow'))
+        default_source_sheet = f"{RUSSIAN_MONTHS[now_cli.month]} {now_cli.year}"
         parser.add_argument('--column', type=int, default=9, 
                             help='Индекс столбца с URL (по умолчанию 9, что соответствует столбцу J)')
         parser.add_argument('--debug', action='store_true', 
                             help='Включить отладочный режим логирования')
         parser.add_argument('--domain', type=str, default=TARGET_DOMAIN,
                             help=f'Целевой домен для фильтрации (по умолчанию {TARGET_DOMAIN})')
-        parser.add_argument('--source_sheet', type=str, default=FIRST_MONTH,
-                            help=f'Название вкладки в исходной таблице (по умолчанию {FIRST_MONTH})')
+        parser.add_argument('--source_sheet', type=str, default=default_source_sheet,
+                            help=f'Название вкладки в исходной таблице (по умолчанию текущий месяц: "{default_source_sheet}")')
         
         args = parser.parse_args()
         
